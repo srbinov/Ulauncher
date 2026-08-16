@@ -37,6 +37,7 @@ class ResultsView(Gtk.ScrolledWindow):
             hscrollbar_policy=Gtk.PolicyType.NEVER,
             propagate_natural_height=True,
             shadow_type=Gtk.ShadowType.IN,
+            kinetic_scrolling=True,
         )
         self._settings = settings
         self._apply_css = apply_css
@@ -94,11 +95,11 @@ class ResultsView(Gtk.ScrolledWindow):
             self.set_min_content_height(-1)  # restore stock sizing
 
         if not result_list:
-            # Hide the scroll container when there are no results since it normally takes up a
-            # minimum amount of space even if it is empty.
+            # Visibility is the caller's job via on_visibility_changed (e.g. a
+            # Gtk.Stack page switch in ulauncher_window.py) rather than
+            # self.hide() here directly -- calling both would fight each other.
             self._user_selected = False
-            self.hide()
-            logger.debug("Hiding results container, no results found")
+            logger.debug("No results found")
             if self._on_visibility_changed:
                 self._on_visibility_changed(False)
             return

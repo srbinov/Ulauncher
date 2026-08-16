@@ -10,7 +10,7 @@ from gi.repository import Gdk, Gtk
 
 from ulauncher import paths
 from ulauncher.internals.results_update import ResultsUpdate
-from ulauncher.ui.app_grid_view import AppGridView, list_desktop_apps
+from ulauncher.ui.app_grid_view import ROW_HEIGHT_PX, AppGridView, list_desktop_apps
 from ulauncher.ui.helpers import layer_shell
 from ulauncher.ui.helpers.monitor import get_monitor, get_monitor_geometries
 from ulauncher.ui.helpers.theme import Theme
@@ -163,10 +163,27 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             self.settings, self.apply_css, self.activate_result, self.on_results_visibility_changed
         )
         self.app_grid = AppGridView(on_launched=self.close)
+        self.blank_page = Gtk.Box()
+
+        # A single Stack owns which content is on screen (results / apps grid /
+        # nothing), instead of each view separately calling its own .show()/
+        # .hide() -- that let two views end up visible at once (e.g. clicking
+        # Files while the apps grid was showing left both stacked). Stack also
+        # gives a real cross-fade between pages for free instead of a snap.
+        # vhomogeneous=False so the Stack sizes to whichever page is actually
+        # showing, not the tallest of the three.
+        self.content_stack = Gtk.Stack(
+            transition_type=Gtk.StackTransitionType.CROSSFADE,
+            transition_duration=180,
+            vhomogeneous=False,
+        )
+        self.content_stack.add_named(self.blank_page, "blank")
+        self.content_stack.add_named(self.results_view, "results")
+        self.content_stack.add_named(self.app_grid, "apps")
+        self.content_stack.set_visible_child_name("blank")
 
         self.theme_root.pack_start(prompt_container, False, True, 0)
-        self.theme_root.pack_start(self.results_view, False, True, 0)
-        self.theme_root.pack_start(self.app_grid, False, True, 0)
+        self.theme_root.pack_start(self.content_stack, False, True, 0)
 
         self.frame.show_all()
 
@@ -222,9 +239,15 @@ class UlauncherWindow(Gtk.ApplicationWindow):
     def on_mode_dot_clicked(self, mode: str) -> None:
         if mode == "apps":
             self.placeholder_label.set_text("Applications")
-            self._show_app_grid()
+            self.app_grid.render(list_desktop_apps())
+            self._switch_content("apps")
         elif mode == "files":
             self.placeholder_label.set_text("Files")
+            # Switch immediately rather than waiting for the query callback --
+            # otherwise the apps grid stayed the visible Stack page until
+            # results arrived, which is what made Files look like it was
+            # rendering "above" the still-showing apps grid.
+            self._switch_content("results")
             # Query the file browser directly rather than set_input("~") --
             # that would show the raw "~" in the entry instead of the "Files"
             # placeholder. query_changed() only needs the string, not the
@@ -232,17 +255,19 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             self.get_app().query_changed("~")
         elif mode == "clipboard":
             self.placeholder_label.set_text("Clipboard")  # Not built yet -- deferred.
+            self._switch_content("blank")
         self.prompt_input.grab_focus_without_selecting()
 
-    def _show_app_grid(self) -> None:
-        self.app_grid.render(list_desktop_apps())
-        self.results_view.hide()
-        self.app_grid.show()
-        self.on_results_visibility_changed(True)
-
-    def _hide_app_grid(self) -> None:
-        if self.app_grid.get_visible():
-            self.app_grid.hide()
+    def _switch_content(self, page: str) -> None:
+        """Single place that decides what's on screen (blank / results /
+        apps) -- the Stack cross-fades between pages, and only one page is
+        ever visible at a time."""
+        self.content_stack.set_visible_child_name(page)
+        style = self.theme_root.get_style_context()
+        if page == "blank":
+            style.remove_class("has-content")
+        else:
+            style.add_class("has-content")
 
     def _dissolve_mode_dots(self) -> None:
         """Fade + scatter the dots out (dust-diminishing look) while the row's
@@ -272,13 +297,10 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             dot.get_style_context().remove_class("dissolving")
 
     def on_results_visibility_changed(self, has_results: bool) -> None:
-        """Liquid-glass panel behind the results/category content -- stays off
-        in the idle state so it's just the floating pill + dots."""
-        style = self.theme_root.get_style_context()
-        if has_results:
-            style.add_class("has-content")
-        else:
-            style.remove_class("has-content")
+        """Called by ResultsView whenever a search/Files query's own results
+        go from empty to non-empty or back (see the on_visibility_changed
+        callback passed into its constructor)."""
+        self._switch_content("results" if has_results else "blank")
 
     def apply_styling(self) -> None:
         """
@@ -347,7 +369,11 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         if query_str:
             self.placeholder_label.set_text(self._default_placeholder)
             self._dissolve_mode_dots()
-            self._hide_app_grid()
+            # Leave the apps grid immediately rather than waiting for the
+            # query callback -- see the same note in on_mode_dot_clicked's
+            # "files" branch.
+            if self.content_stack.get_visible_child_name() == "apps":
+                self._switch_content("blank")
         else:
             self._materialize_mode_dots()
         self.get_app().query_changed(query_str)
@@ -482,7 +508,9 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             pos_y = layout_size.height * 0.1
 
             prompt_height = self.prompt.get_allocated_height()
-            max_height = layout_size.height - prompt_height - pos_y * 2
+            # -ROW_HEIGHT_PX: was tall enough to overlap the dock at the
+            # bottom of the screen -- trim it back by one app-grid row.
+            max_height = layout_size.height - prompt_height - pos_y * 2 - ROW_HEIGHT_PX
             self.results_view.set_max_height(int(max_height))
             self.app_grid.set_max_height(int(max_height))
 

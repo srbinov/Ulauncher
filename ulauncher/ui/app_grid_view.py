@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 ICON_SIZE = 56
 TILES_PER_ROW = 4
+# Measured tile-row pitch (112px tile + 16px row_spacing) -- used by
+# ulauncher_window.py to trim the window's height budget by one row.
+ROW_HEIGHT_PX = 128
 
 
 def list_desktop_apps() -> list[AppResult]:
@@ -48,9 +51,10 @@ class AppGridView(Gtk.ScrolledWindow):
     """All-apps grid for the Applications mode-dot: big icon + name below, 4 per row."""
 
     def __init__(self, on_launched: Callable[[], None]) -> None:
-        super().__init__(hscrollbar_policy=Gtk.PolicyType.NEVER, propagate_natural_height=True)
+        super().__init__(
+            hscrollbar_policy=Gtk.PolicyType.NEVER, propagate_natural_height=True, kinetic_scrolling=True
+        )
         self._on_launched = on_launched
-        self.set_no_show_all(True)
         self.flow = Gtk.FlowBox(
             selection_mode=Gtk.SelectionMode.NONE,
             homogeneous=True,
@@ -72,10 +76,10 @@ class AppGridView(Gtk.ScrolledWindow):
         self.flow.foreach(lambda w: w.destroy())
         for app in apps:
             self.flow.add(self._make_tile(app))
-        # self.show_all() would be a no-op: `self` has no-show-all set (so the
-        # initial window-construction show_all() cascade doesn't reveal an
-        # empty grid) -- show_all() on flow directly isn't blocked by that.
-        self.flow.show_all()
+        # Screen visibility is a Gtk.Stack page-selection concern (see
+        # ulauncher_window.py's content_stack) -- show_all() here just
+        # realizes the widgets, it doesn't put this page on screen.
+        self.show_all()
 
     def _fit_height(self, flow: Gtk.FlowBox, allocation: Gdk.Rectangle) -> None:
         """FlowBox doesn't report a usable natural height-for-width to a
