@@ -20,7 +20,7 @@ class Settings(JsonConf):
     jump_keys: str = "1234567890abcdefghijklmnopqrstuvwxyz"
     keep_alive: bool = True
     layer_shell: bool = True
-    max_recent_apps: int = 0
+    max_recent_apps: int = 24
     raise_if_started: bool = False
     render_on_screen: str = "mouse-pointer-monitor"
     show_tray_icon: bool = True

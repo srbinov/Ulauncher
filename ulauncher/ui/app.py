@@ -50,6 +50,12 @@ class UlauncherApp(Gtk.Application):
         return gi.version_info  # type: ignore[attr-defined]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # Without this, the window's WM class/app-id falls back to GLib's
+        # default prgname, which for `python3 -m ulauncher` is literally
+        # "__main__.py" -- that's what shows up as the running app's name
+        # in window-tracker-driven UI (e.g. the top bar's per-app menu).
+        GLib.set_prgname("peachySearch")
+        GLib.set_application_name("peachySearch")
         kwargs.update(application_id=app_id)
         super().__init__(*args, **kwargs)
         self.windows = WeakValueDictionary()

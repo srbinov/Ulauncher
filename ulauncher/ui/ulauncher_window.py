@@ -10,6 +10,7 @@ from gi.repository import Gdk, Gtk
 
 from ulauncher import paths
 from ulauncher.internals.results_update import ResultsUpdate
+from ulauncher.ui.app_grid_view import AppGridView, list_desktop_apps
 from ulauncher.ui.helpers import layer_shell
 from ulauncher.ui.helpers.monitor import get_monitor, get_monitor_geometries
 from ulauncher.ui.helpers.theme import Theme
@@ -27,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 class UlauncherWindow(Gtk.ApplicationWindow):
     _css_provider: Gtk.CssProvider | None = None
-    is_dragging = False
     layer_shell_enabled = False
     settings: Settings
 
@@ -76,7 +76,7 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         # frame (positioning container for Gnome, not affected by theme)
         # └── shadow_container (provides space for shadow when enabled)
         #     └── theme_root(.app)
-        #         ├── drag_listener
+        #         ├── prompt_container
         #         │   └── prompt
         #         │       ├── prompt_input (.input)
         #         │       └── prefs_btn (.prefs-btn)
@@ -93,9 +93,9 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         self.theme_root = Gtk.Box(app_paintable=True, orientation=Gtk.Orientation.VERTICAL)
         shadow_container.pack_start(self.theme_root, True, True, 0)
 
-        self.prompt = Gtk.Box()
-        drag_listener = Gtk.EventBox()
-        drag_listener.add(self.prompt)
+        self.prompt = Gtk.Box(spacing=12)
+        prompt_container = Gtk.EventBox()
+        prompt_container.add(self.prompt)
 
         self.prompt_input = Gtk.Entry(
             can_default=True,
@@ -108,7 +108,29 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             margin_start=20,
             margin_end=20,
             receives_default=True,
+            primary_icon_name="edit-find-symbolic",
+            primary_icon_sensitive=False,
+            primary_icon_activatable=False,
         )
+
+        # A hand-rolled placeholder instead of GtkEntry's native placeholder-text:
+        # that property rendered nothing at all in this theme/GTK combo (not just
+        # low-contrast -- fully absent), and a real Label gives full control over
+        # the liquid-glass color plus lets on_mode_dot_clicked swap the text to
+        # "Applications"/"Files"/"Clipboard". A bare Label has no GdkWindow, so
+        # clicks fall through to the entry underneath -- no event handling needed.
+        self._default_placeholder = "peachySearch"
+        self.placeholder_label = Gtk.Label(
+            label=self._default_placeholder,
+            halign=Gtk.Align.START,
+            valign=Gtk.Align.CENTER,
+            margin_start=57,
+            can_focus=False,
+        )
+        self.placeholder_label.get_style_context().add_class("placeholder-label")
+        self.prompt_input_overlay = Gtk.Overlay()
+        self.prompt_input_overlay.add(self.prompt_input)
+        self.prompt_input_overlay.add_overlay(self.placeholder_label)
 
         self.prefs_btn = Gtk.Button(
             name="prefs_btn",
@@ -120,20 +142,36 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             margin_end=15,
         )
 
-        self.prompt.pack_start(self.prompt_input, True, True, 0)
-        self.prompt.pack_end(self.prefs_btn, False, False, 0)
+        # Idle-state mode picker (Applications / Files / Clipboard), macOS Spotlight style.
+        # Dissolves as soon as there's a query -- see on_input_changed.
+        self._dissolve_timer: scheduling.Context | None = None
+        self.mode_dots = Gtk.Box(spacing=10, valign=Gtk.Align.CENTER)
+        self.mode_dots.get_style_context().add_class("mode-dots-row")
+        self.apps_dot = self._make_mode_dot("view-app-grid-symbolic", "Applications", "mode-dot-1")
+        self.files_dot = self._make_mode_dot("folder-symbolic", "Files", "mode-dot-2")
+        self.clipboard_dot = self._make_mode_dot("edit-paste-symbolic", "Clipboard (coming soon)", "mode-dot-3")
+        self.apps_dot.connect("clicked", lambda *_: self.on_mode_dot_clicked("apps"))
+        self.files_dot.connect("clicked", lambda *_: self.on_mode_dot_clicked("files"))
+        self.clipboard_dot.connect("clicked", lambda *_: self.on_mode_dot_clicked("clipboard"))
+        for dot in (self.apps_dot, self.files_dot, self.clipboard_dot):
+            self.mode_dots.pack_start(dot, False, False, 0)
 
-        self.results_view = ResultsView(self.settings, self.apply_css, self.activate_result)
+        self.prompt.pack_start(self.prompt_input_overlay, True, True, 0)
+        self.prompt.pack_end(self.mode_dots, False, False, 0)
 
-        self.theme_root.pack_start(drag_listener, False, True, 0)
+        self.results_view = ResultsView(
+            self.settings, self.apply_css, self.activate_result, self.on_results_visibility_changed
+        )
+        self.app_grid = AppGridView(on_launched=self.close)
+
+        self.theme_root.pack_start(prompt_container, False, True, 0)
         self.theme_root.pack_start(self.results_view, False, True, 0)
+        self.theme_root.pack_start(self.app_grid, False, True, 0)
 
         self.frame.show_all()
 
         self.connect("focus-in-event", lambda *_: self.on_focus_in())
         self.connect("focus-out-event", lambda *_: self.on_focus_out())
-        drag_listener.connect("button-press-event", self.on_mouse_down)
-        self.connect("button-release-event", lambda *_: self.on_mouse_up())
         self.prompt_input.connect("changed", lambda *_: self.on_input_changed())
         self.prompt_input.connect("key-press-event", self.on_input_key_press)
         self.connect("draw", self.on_initial_draw)
@@ -165,6 +203,82 @@ class UlauncherWindow(Gtk.ApplicationWindow):
 
         if self.query_str:
             self.set_input(self.query_str)
+
+    def _make_mode_dot(self, icon_name: str, tooltip: str, css_class: str) -> Gtk.Button:
+        # Sized via CSS min-width/min-height (not width_request/height_request)
+        # so dissolving can animate it down to 0 instead of an instant resize.
+        btn = Gtk.Button(
+            receives_default=False,
+            halign=Gtk.Align.CENTER,
+            valign=Gtk.Align.CENTER,
+            tooltip_text=tooltip,
+        )
+        style = btn.get_style_context()
+        style.add_class("mode-dot")
+        style.add_class(css_class)
+        btn.set_image(Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.LARGE_TOOLBAR))
+        return btn
+
+    def on_mode_dot_clicked(self, mode: str) -> None:
+        if mode == "apps":
+            self.placeholder_label.set_text("Applications")
+            self._show_app_grid()
+        elif mode == "files":
+            self.placeholder_label.set_text("Files")
+            # Query the file browser directly rather than set_input("~") --
+            # that would show the raw "~" in the entry instead of the "Files"
+            # placeholder. query_changed() only needs the string, not the
+            # entry's own text, so the two can stay decoupled.
+            self.get_app().query_changed("~")
+        elif mode == "clipboard":
+            self.placeholder_label.set_text("Clipboard")  # Not built yet -- deferred.
+        self.prompt_input.grab_focus_without_selecting()
+
+    def _show_app_grid(self) -> None:
+        self.app_grid.render(list_desktop_apps())
+        self.results_view.hide()
+        self.app_grid.show()
+        self.on_results_visibility_changed(True)
+
+    def _hide_app_grid(self) -> None:
+        if self.app_grid.get_visible():
+            self.app_grid.hide()
+
+    def _dissolve_mode_dots(self) -> None:
+        """Fade + scatter the dots out (dust-diminishing look) while the row's
+        own min-width/margin collapse to 0 over the same transition, so the
+        search entry grows into the freed space smoothly instead of snapping
+        once the row is fully hidden."""
+        if self._dissolve_timer:
+            return  # already dissolving
+        self.mode_dots.get_style_context().add_class("dissolving")
+        for dot in (self.apps_dot, self.files_dot, self.clipboard_dot):
+            dot.get_style_context().add_class("dissolving")
+        # 340ms = mode-dot-3's 80ms transition-delay + its 260ms transition (see peachos.css)
+        self._dissolve_timer = scheduling.timer(0.36, self._finish_dissolve)
+
+    def _finish_dissolve(self) -> None:
+        self._dissolve_timer = None
+        if self.prompt_input.get_text():  # still non-empty -- really hide it
+            self.mode_dots.set_visible(False)
+
+    def _materialize_mode_dots(self) -> None:
+        if self._dissolve_timer:
+            self._dissolve_timer.cancel()
+            self._dissolve_timer = None
+        self.mode_dots.set_visible(True)
+        self.mode_dots.get_style_context().remove_class("dissolving")
+        for dot in (self.apps_dot, self.files_dot, self.clipboard_dot):
+            dot.get_style_context().remove_class("dissolving")
+
+    def on_results_visibility_changed(self, has_results: bool) -> None:
+        """Liquid-glass panel behind the results/category content -- stays off
+        in the idle state so it's just the floating pill + dots."""
+        style = self.theme_root.get_style_context()
+        if has_results:
+            style.add_class("has-content")
+        else:
+            style.remove_class("has-content")
 
     def apply_styling(self) -> None:
         """
@@ -216,7 +330,7 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         scheduling.run_when_idle(self.deferred_init)
 
     def on_focus_out(self) -> None:
-        if self.settings.close_on_focus_out and not self.is_dragging:
+        if self.settings.close_on_focus_out:
             self.close(save_query=True)
 
     def on_focus_in(self) -> None:
@@ -227,7 +341,16 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         """
         Triggered by user input
         """
-        self.get_app().query_changed(self.prompt_input.get_text())
+        query_str = self.prompt_input.get_text()
+        self.placeholder_label.set_visible(not query_str)
+        # Idle-state mode picker only makes sense with an empty query -- see on_mode_dot_clicked.
+        if query_str:
+            self.placeholder_label.set_text(self._default_placeholder)
+            self._dissolve_mode_dots()
+            self._hide_app_grid()
+        else:
+            self._materialize_mode_dots()
+        self.get_app().query_changed(query_str)
 
     def activate_result(self, alt: bool) -> None:
         """
@@ -296,17 +419,6 @@ class UlauncherWindow(Gtk.ApplicationWindow):
                 return True
         return False
 
-    def on_mouse_down(self, _event_box: Gtk.EventBox, event: Gdk.EventButton) -> None:
-        """
-        Move the window on drag
-        """
-        if event.button == 1 and event.type == Gdk.EventType.BUTTON_PRESS:
-            self.is_dragging = True
-            self.begin_move_drag(event.button, int(event.x_root), int(event.y_root), event.time)
-
-    def on_mouse_up(self) -> None:
-        self.is_dragging = False
-
     ######################################
     # Helpers
     ######################################
@@ -372,6 +484,7 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             prompt_height = self.prompt.get_allocated_height()
             max_height = layout_size.height - prompt_height - pos_y * 2
             self.results_view.set_max_height(int(max_height))
+            self.app_grid.set_max_height(int(max_height))
 
             # Part II of the Gnome Wayland fix (see above in __init__)
             # Use margins to center the visible content within the full-screen window

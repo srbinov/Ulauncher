@@ -30,6 +30,7 @@ class ResultsView(Gtk.ScrolledWindow):
         settings: Settings,
         apply_css: Callable[[Gtk.Widget], None],
         activate_result: Callable[[bool], None],
+        on_visibility_changed: Callable[[bool], None] | None = None,
     ) -> None:
         super().__init__(
             can_focus=True,
@@ -40,6 +41,7 @@ class ResultsView(Gtk.ScrolledWindow):
         self._settings = settings
         self._apply_css = apply_css
         self._activate_result = activate_result
+        self._on_visibility_changed = on_visibility_changed
         self._widgets: list[ResultWidget] = []
         self._box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self._box.get_style_context().add_class("result-box")
@@ -97,6 +99,8 @@ class ResultsView(Gtk.ScrolledWindow):
             self._user_selected = False
             self.hide()
             logger.debug("Hiding results container, no results found")
+            if self._on_visibility_changed:
+                self._on_visibility_changed(False)
             return
 
         self._add_widgets(result_list, update["query"], start_index=0)
@@ -106,6 +110,8 @@ class ResultsView(Gtk.ScrolledWindow):
         self._apply_css(self._box)
         self.show_all()
         logger.debug("Render %s results", len(self._widgets))
+        if self._on_visibility_changed:
+            self._on_visibility_changed(True)
 
     def _append_results(self, update: ResultsUpdate) -> None:
         existing = len(self._widgets)

@@ -1,0 +1,280 @@
+/**
+ * peachOS -- Spotlight-style theme for the macOS-look launcher.
+ * Based on the stock "light" theme's structure/color roles.
+ */
+@define-color bg_color rgba(246, 246, 248, 0.92);
+@define-color window_shadow rgba(0, 0, 0, 0.35);
+@define-color window_bg @bg_color;
+@define-color window_border_color rgba(0, 0, 0, 0.08);
+@define-color prefs_background #ccc;
+
+@define-color selected_bg_color rgba(10, 132, 255, 0.18);
+@define-color selected_fg_color #1c1c1e;
+@define-color input_color #1c1c1e;
+@define-color caret_color #0a84ff;
+
+@define-color item_name #1c1c1e;
+@define-color item_text rgba(28, 28, 30, 0.65);
+@define-color item_box_selected rgba(10, 132, 255, 0.18);
+@define-color item_text_selected @item_name;
+@define-color item_name_selected @item_name;
+@define-color item_shortcut_color rgba(28, 28, 30, 0.45);
+@define-color item_shortcut_shadow rgba(255, 255, 255, 0.6);
+@define-color item_shortcut_color_sel #0a84ff;
+@define-color item_shortcut_shadow_sel rgba(255, 255, 255, 0.6);
+@define-color item_highlight #0a84ff;
+@define-color item_highlight_selected @item_highlight;
+
+/* GTK3 puts an implicit ".background" class on every toplevel window's
+   CSS node, which the active system GTK theme (not this stylesheet)
+   paints opaque by default. Neutralize it or the whole 1280x800
+   positioning frame (see ulauncher_window.py's Gnome-Wayland comment)
+   shows up as a solid rectangle instead of being invisible. */
+window,
+window.background,
+.background {
+  background-color: transparent;
+}
+
+/* Transparent by default -- idle state is just the floating pill + dots,
+   no enclosing card. ".has-content" (toggled from
+   on_results_visibility_changed in ulauncher_window.py) switches on the
+   liquid-glass panel below once there's something to frame. */
+.app {
+  background-color: transparent;
+  border: none;
+  border-radius: 18px;
+  transition: background-color 180ms ease-out, border-color 180ms ease-out;
+}
+
+/* Liquid glass recipe -- ported from macOS-TopBar-Gnome's
+   docs/liquid-glass-style.md ("Web / non-Shell ports" mapping): frosted
+   fill + a vertical highlight gradient + a brighter rim + an inset top
+   light-catch line. GTK3 CSS supports linear-gradient()/inset box-shadow
+   directly, unlike the Shell's St CSS (background-gradient-* properties),
+   so this uses the real CSS form instead of the St-specific one. */
+.app.has-content {
+  background-color: rgba(255, 255, 255, 0.12);
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.08));
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 22px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 16px 40px rgba(15, 30, 55, 0.3);
+}
+
+/* Spotlight-style pill search field, with the magnifying-glass icon
+   set via primary_icon_name in ulauncher_window.py. */
+.input {
+  font-size: 170%;
+  padding: 6px 14px;
+  caret-color: @caret_color;
+  color: @input_color;
+  background-color: rgba(240, 245, 250, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 999px;
+  box-shadow: 0 6px 18px rgba(20, 40, 70, 0.18);
+}
+/* Explicit + comprehensive: the icon area is a themed "activatable icon"
+   CSS node, and this theme paints a rounded focus/hover box specifically
+   there regardless of primary_icon_sensitive. Setting
+   primary_icon_activatable=False in Python addresses the interactivity
+   side; this covers every paint state so no box can show regardless of
+   which one the theme was actually keying off. */
+.input image,
+.input image:hover,
+.input image:focus,
+.input image:active,
+.input image:backdrop {
+  color: rgba(60, 75, 90, 0.6);
+  margin-right: 6px;
+  background-color: transparent;
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  outline: none;
+}
+
+/* Hand-rolled placeholder (see placeholder_label in ulauncher_window.py --
+   GtkEntry's native placeholder-text rendered nothing at all in this
+   theme/GTK combo). Muted, translucent version of the icon's own tone so
+   it reads as a soft glass hint rather than solid text. */
+.placeholder-label {
+  font-size: 170%;
+  color: rgba(60, 75, 90, 0.5);
+}
+
+/* The system theme's entry:focus/:hover rules paint their own
+   background + a blue inset focus ring (box-shadow) that wraps the
+   whole pill -- most visible around the icon since it sits at the
+   pill's left edge. The entry is focused by default the moment the
+   window opens, so this was always showing. Re-assert our own look
+   for those states explicitly rather than relying on provider-priority
+   alone to suppress it. */
+.input:hover,
+.input:focus {
+  background-color: rgba(240, 245, 250, 0.85);
+  box-shadow: 0 6px 18px rgba(20, 40, 70, 0.18);
+}
+
+/* GTK 3.20+'s real placeholder CSS node -- the system theme doesn't
+   style it, so it was falling back to a dim/insensitive-looking color
+   that washed out against the light pill background. */
+.input placeholder {
+  color: rgba(50, 70, 90, 0.65);
+  opacity: 1;
+}
+
+.input *:selected,
+.input *:focus,
+*:selected:focus {
+  background-color: alpha(@selected_bg_color, 0.9);
+  color: @selected_fg_color;
+}
+
+/* The row's own footprint (3 * 48px dots + 2 * 10px Box spacing = 164px)
+   collapses to 0 alongside the dots below, so the search entry (packed
+   expand=True, fill=True next to this row) grows into the freed space
+   smoothly frame-by-frame as the transition runs, instead of snapping the
+   instant _finish_dissolve() finally calls set_visible(False). */
+.mode-dots-row {
+  min-width: 164px;
+  margin-right: 15px;
+  transition: min-width 300ms ease-out, margin 300ms ease-out;
+}
+.mode-dots-row.dissolving {
+  min-width: 0;
+  margin-right: 0;
+}
+
+/* Idle-state mode picker (Applications / Files / Clipboard) -- macOS
+   Spotlight's row of circles, left-to-right in increasing tint.
+   ".dissolving" (toggled from _dissolve_mode_dots/_materialize_mode_dots
+   in ulauncher_window.py) fades + scatters each dot outward on typing --
+   GTK3 CSS has no real particle system, so this is a staggered
+   opacity+margin transition standing in for a dust-diminishing effect. */
+.mode-dot {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  padding: 0;
+  box-shadow: 0 6px 14px rgba(20, 40, 70, 0.16);
+  opacity: 1;
+  min-width: 48px;
+  min-height: 48px;
+  transition: opacity 260ms ease-out, margin 260ms ease-out, min-width 260ms ease-out, min-height 260ms ease-out;
+}
+.mode-dot image {
+  color: #2c5f7c;
+  min-width: 22px;
+  min-height: 22px;
+}
+
+.mode-dot.mode-dot-1 {
+  background-color: rgba(214, 234, 248, 0.85);
+}
+.mode-dot.mode-dot-1:hover {
+  background-color: rgba(214, 234, 248, 1);
+}
+.mode-dot.mode-dot-1.dissolving {
+  opacity: 0;
+  min-width: 0;
+  min-height: 0;
+  margin-top: -12px;
+  margin-left: -10px;
+}
+
+.mode-dot.mode-dot-2 {
+  background-color: rgba(179, 220, 245, 0.88);
+}
+.mode-dot.mode-dot-2:hover {
+  background-color: rgba(179, 220, 245, 1);
+}
+.mode-dot.mode-dot-2.dissolving {
+  opacity: 0;
+  min-width: 0;
+  min-height: 0;
+  margin-top: -18px;
+  transition-delay: 40ms;
+}
+
+.mode-dot.mode-dot-3 {
+  background-color: rgba(147, 205, 240, 0.9);
+}
+.mode-dot.mode-dot-3:hover {
+  background-color: rgba(147, 205, 240, 1);
+}
+.mode-dot.mode-dot-3.dissolving {
+  opacity: 0;
+  min-width: 0;
+  min-height: 0;
+  margin-top: -12px;
+  margin-left: 10px;
+  transition-delay: 80ms;
+}
+
+/* Applications mode-dot grid -- big icon + name below, no visible chrome
+   of its own since it sits inside the .app.has-content glass panel. */
+.app-grid-tile {
+  background-color: transparent;
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  padding: 10px;
+  border-radius: 14px;
+}
+.app-grid-tile:hover {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+.app-grid-tile-label {
+  color: @item_name;
+  font-size: 90%;
+}
+
+.item-text {
+  color: @item_text;
+}
+.item-name {
+  font-size: 120%;
+  color: @item_name;
+}
+.item-highlight {
+  color: @item_highlight;
+}
+
+.small-result-item .item-name {
+  font-size: 100%;
+}
+.item-descr {
+  font-size: 80%;
+}
+
+.selected.item-box {
+  background-color: @item_box_selected;
+  border: none;
+  border-radius: 10px;
+}
+.selected.item-box .item-text {
+  color: @item_text_selected;
+}
+.selected.item-box .item-name {
+  color: @item_name_selected;
+}
+.selected.item-box .item-highlight {
+  color: @item_highlight_selected;
+}
+.item-shortcut {
+  color: @item_shortcut_color;
+  text-shadow: 1px 1px 1px @item_shortcut_shadow;
+}
+.selected.item-box .item-shortcut {
+  color: @item_shortcut_color_sel;
+  text-shadow: 1px 1px 1px @item_shortcut_shadow_sel;
+}
+
+.prefs-btn {
+  border-radius: 12px;
+  opacity: 0.8;
+}
+.prefs-btn:hover {
+  background-color: @prefs_background;
+}
