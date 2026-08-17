@@ -128,6 +128,16 @@ class UlauncherApp(Gtk.Application):
     def setup(self) -> None:
         settings = Settings.load()
         self.core = UlauncherCore()
+
+        # DISABLED 2026-08-17: the wl-paste-based poll (every 1s, indefinitely) destabilized
+        # Mutter -- repeated "meta_window_set_stack_position_no_sync: assertion
+        # 'window->stack_position >= 0' failed" errors and an actual VM crash, apparently from
+        # each poll's short-lived Wayland client connection. Re-enable only after a fix is
+        # verified stable in isolation (not through the full app) over an extended run.
+        # from ulauncher.modes.clipboard.clipboard_history import start_monitoring
+        #
+        # start_monitoring()
+
         # Always hold on app start (conditionally release after closing window)
         self.hold()
         self._persistent = settings.is_persistent()
@@ -180,13 +190,62 @@ class UlauncherApp(Gtk.Application):
 
     @events.on
     def clipboard_store(self, data: str) -> None:
-        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-        clipboard.set_text(data, -1)
-        clipboard.store()
+        # GTK3's GDK Wayland clipboard backend doesn't actually work in this environment: neither
+        # writes (this method, previously plain Gtk.Clipboard.set_text+store) nor reads (see
+        # clipboard_history.py) round-trip through the compositor -- verified with wl-copy/wl-paste
+        # alongside it. wl-copy forks its own detached process to hold the selection, so it
+        # doesn't depend on us staying alive either. X11 sessions keep the GDK path, which is
+        # unaffected by this bug.
+        from ulauncher.utils.environment import IS_X11_COMPATIBLE
+
+        if IS_X11_COMPATIBLE:
+            clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+            clipboard.set_text(data, -1)
+            clipboard.store()
+            return
+        launcher = Gio.SubprocessLauncher.new(Gio.SubprocessFlags.STDIN_PIPE)
+        try:
+            proc = launcher.spawnv(["wl-copy"])
+        except GLib.Error:
+            logger.warning("Could not set clipboard: wl-copy not available")
+            return
+        proc.communicate_utf8_async(data, None, lambda *_: None)
 
     @events.on
     def copy_and_close(self, data: str) -> None:
         self.clipboard_store(data)
+        self.close_launcher()
+
+    @events.on
+    def clipboard_store_image(self, path: str) -> None:
+        from ulauncher.utils.environment import IS_X11_COMPATIBLE
+
+        if IS_X11_COMPATIBLE:
+            from gi.repository import GdkPixbuf
+
+            try:
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
+            except GLib.Error:
+                logger.warning("Could not load clipboard image from %s", path)
+                return
+            clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+            clipboard.set_image(pixbuf)
+            clipboard.store()
+            return
+        # Stream the PNG straight from disk into wl-copy's stdin -- no need to decode it
+        # ourselves, we're just relaying the bytes.
+        launcher = Gio.SubprocessLauncher.new(Gio.SubprocessFlags.NONE)
+        launcher.set_stdin_file_path(path)
+        try:
+            proc = launcher.spawnv(["wl-copy", "--type", "image/png"])
+        except GLib.Error:
+            logger.warning("Could not set clipboard image: wl-copy not available")
+            return
+        proc.wait_async(None, lambda *_: None)
+
+    @events.on
+    def copy_and_close_image(self, path: str) -> None:
+        self.clipboard_store_image(path)
         self.close_launcher()
 
     @events.on
