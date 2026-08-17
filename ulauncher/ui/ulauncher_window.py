@@ -21,9 +21,30 @@ from ulauncher.utils.environment import DESKTOP_ID, IS_X11_COMPATIBLE
 from ulauncher.utils.settings import Settings
 
 if TYPE_CHECKING:
+    from cairo import ImageSurface
+    from gi.repository import GdkPixbuf
+
     from ulauncher.ui.app import UlauncherApp
 
 logger = logging.getLogger(__name__)
+
+
+def _tint_icon_surface(surface: ImageSurface, rgba: tuple[float, float, float, float]) -> ImageSurface:
+    """Recolor a full-color icon surface to a flat tint using its own alpha channel as a
+    mask -- i.e. fake GTK's "symbolic icon" recoloring for a real symbolic icon-name, our
+    applications-mode.svg is a full-color raster, so the theme's `color` CSS property (which
+    is what recolors folder-symbolic/edit-paste-symbolic to match) has no effect on it."""
+    import cairo
+
+    tinted = cairo.ImageSurface(cairo.FORMAT_ARGB32, surface.get_width(), surface.get_height())
+    tinted.set_device_scale(*surface.get_device_scale())
+    ctx = cairo.Context(tinted)
+    ctx.set_source_surface(surface, 0, 0)
+    ctx.paint()
+    ctx.set_operator(cairo.OPERATOR_IN)
+    ctx.set_source_rgba(*rgba)
+    ctx.paint()
+    return tinted
 
 
 class UlauncherWindow(Gtk.ApplicationWindow):
@@ -48,12 +69,18 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             decorated=False,
             deletable=False,
             has_focus=True,
-            icon_name="ulauncher",
+            icon_name="peachysearch",
             opacity=0,  # set to 0 so we can show the window and get keyboard input before it's fully loaded
             resizable=False,
             skip_pager_hint=True,
             skip_taskbar_hint=True,
-            title="Ulauncher - Application Launcher",
+            # UTILITY (not the default NORMAL) is what actually keeps this out of the dock's
+            # running-apps display -- skip_taskbar_hint alone covers legacy X11 taskbars, but
+            # GNOME Shell's own app/window tracking (which dash2dock-lite and every other dock
+            # extension build on) keys off the window type, not that hint, to decide whether a
+            # window counts as "the app is running" for dock purposes.
+            type_hint=Gdk.WindowTypeHint.UTILITY,
+            title="peachySearch",
             urgency_hint=True,
             window_position=Gtk.WindowPosition.CENTER,
             width_request=width_request,
@@ -117,7 +144,7 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         # that property rendered nothing at all in this theme/GTK combo (not just
         # low-contrast -- fully absent), and a real Label gives full control over
         # the liquid-glass color plus lets on_mode_dot_clicked swap the text to
-        # "Applications"/"Files"/"Clipboard". A bare Label has no GdkWindow, so
+        # "Applications"/"Files". A bare Label has no GdkWindow, so
         # clicks fall through to the entry underneath -- no event handling needed.
         self._default_placeholder = "peachySearch"
         self.placeholder_label = Gtk.Label(
@@ -142,18 +169,35 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             margin_end=15,
         )
 
-        # Idle-state mode picker (Applications / Files / Clipboard), macOS Spotlight style.
+        # Idle-state mode picker (Applications / Files), macOS Spotlight style.
         # Dissolves as soon as there's a query -- see on_input_changed.
+        # Clipboard mode-dot removed 2026-08-17: its background clipboard poll destabilized
+        # Mutter (see ulauncher/modes/clipboard/clipboard_history.py's start_monitoring, which
+        # app.py no longer calls). The mode/backend code is still there, just not wired into the
+        # UI, so it can come back once the polling approach is fixed and verified safe.
         self._dissolve_timer: scheduling.Context | None = None
+        # Which mode's icon+name is currently shown in the search bar in place of the
+        # magnifying glass (None = idle/typing state). See on_mode_dot_clicked/_revert_active_mode.
+        self._active_mode: str | None = None
+        # Loaded lazily in apply_styling(), once the display scale factor is known.
+        self._apps_icon_pixbuf: GdkPixbuf.Pixbuf | None = None
+        # grab_focus_without_selecting() below fires the entry's own focus-in-event just like a
+        # real click would -- without this guard, on_prompt_focus_in would immediately revert the
+        # mode this same click is trying to set. See on_mode_dot_clicked.
+        self._suppress_focus_revert = False
         self.mode_dots = Gtk.Box(spacing=10, valign=Gtk.Align.CENTER)
         self.mode_dots.get_style_context().add_class("mode-dots-row")
-        self.apps_dot = self._make_mode_dot("view-app-grid-symbolic", "Applications", "mode-dot-1")
-        self.files_dot = self._make_mode_dot("folder-symbolic", "Files", "mode-dot-2")
-        self.clipboard_dot = self._make_mode_dot("edit-paste-symbolic", "Clipboard (coming soon)", "mode-dot-3")
+        # icon-name for the entry's primary icon per mode; "apps" is swapped for the real
+        # applications-mode.svg surface once apply_styling() can size it for the display scale.
+        self._mode_icon_names = {
+            "apps": "view-app-grid-symbolic",
+            "files": "folder-symbolic",
+        }
+        self.apps_dot = self._make_mode_dot(self._mode_icon_names["apps"], "Applications", "mode-dot-1")
+        self.files_dot = self._make_mode_dot(self._mode_icon_names["files"], "Files", "mode-dot-2")
         self.apps_dot.connect("clicked", lambda *_: self.on_mode_dot_clicked("apps"))
         self.files_dot.connect("clicked", lambda *_: self.on_mode_dot_clicked("files"))
-        self.clipboard_dot.connect("clicked", lambda *_: self.on_mode_dot_clicked("clipboard"))
-        for dot in (self.apps_dot, self.files_dot, self.clipboard_dot):
+        for dot in (self.apps_dot, self.files_dot):
             self.mode_dots.pack_start(dot, False, False, 0)
 
         self.prompt.pack_start(self.prompt_input_overlay, True, True, 0)
@@ -191,6 +235,7 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         self.connect("focus-out-event", lambda *_: self.on_focus_out())
         self.prompt_input.connect("changed", lambda *_: self.on_input_changed())
         self.prompt_input.connect("key-press-event", self.on_input_key_press)
+        self.prompt_input.connect("focus-in-event", lambda *_: self.on_prompt_focus_in())
         self.connect("draw", self.on_initial_draw)
         self.prefs_btn.connect("clicked", lambda *_: self.get_app().show_preferences())
 
@@ -253,10 +298,40 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             # placeholder. query_changed() only needs the string, not the
             # entry's own text, so the two can stay decoupled.
             self.get_app().query_changed("~")
-        elif mode == "clipboard":
-            self.placeholder_label.set_text("Clipboard")  # Not built yet -- deferred.
-            self._switch_content("blank")
+        self._active_mode = mode
+        self._set_prompt_icon(mode)
+        self._suppress_focus_revert = True
         self.prompt_input.grab_focus_without_selecting()
+        self._suppress_focus_revert = False
+
+    def _set_prompt_icon(self, mode: str | None) -> None:
+        """Swap the entry's primary icon between the default magnifying glass and the
+        active mode's own icon (the same icon its mode-dot uses), so the search bar
+        reads as "[icon] Applications" etc. alongside the placeholder_label text."""
+        if mode is None:
+            self.prompt_input.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, "edit-find-symbolic")
+            return
+        if mode == "apps" and self._apps_icon_pixbuf is not None:
+            self.prompt_input.set_icon_from_pixbuf(Gtk.EntryIconPosition.PRIMARY, self._apps_icon_pixbuf)
+            return
+        self.prompt_input.set_icon_from_icon_name(Gtk.EntryIconPosition.PRIMARY, self._mode_icon_names[mode])
+
+    def _revert_active_mode(self) -> None:
+        """Undo an active mode's icon/name/content back to idle, ready for regular typing."""
+        self._active_mode = None
+        self.placeholder_label.set_text(self._default_placeholder)
+        self._set_prompt_icon(None)
+        self._switch_content("blank")
+        self.get_app().query_changed("")
+
+    def on_prompt_focus_in(self) -> None:
+        """Clicking back into the search bar while a mode's results are showing (Applications
+        grid, Files listing) but nothing has been typed yet -- treat it as "never mind, let me
+        type a regular search" rather than leaving the stale icon/name/results up."""
+        if self._suppress_focus_revert:
+            return
+        if self._active_mode and not self.prompt_input.get_text():
+            self._revert_active_mode()
 
     def _switch_content(self, page: str) -> None:
         """Single place that decides what's on screen (blank / results /
@@ -277,9 +352,9 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         if self._dissolve_timer:
             return  # already dissolving
         self.mode_dots.get_style_context().add_class("dissolving")
-        for dot in (self.apps_dot, self.files_dot, self.clipboard_dot):
+        for dot in (self.apps_dot, self.files_dot):
             dot.get_style_context().add_class("dissolving")
-        # 340ms = mode-dot-3's 80ms transition-delay + its 260ms transition (see peachos.css)
+        # 360ms safely clears mode-dot-2's 40ms transition-delay + its 260ms transition (see peachos.css)
         self._dissolve_timer = scheduling.timer(0.36, self._finish_dissolve)
 
     def _finish_dissolve(self) -> None:
@@ -293,7 +368,7 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             self._dissolve_timer = None
         self.mode_dots.set_visible(True)
         self.mode_dots.get_style_context().remove_class("dissolving")
-        for dot in (self.apps_dot, self.files_dot, self.clipboard_dot):
+        for dot in (self.apps_dot, self.files_dot):
             dot.get_style_context().remove_class("dissolving")
 
     def on_results_visibility_changed(self, has_results: bool) -> None:
@@ -316,6 +391,22 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         self.prefs_btn.get_style_context().add_class("prefs-btn")
         prefs_icon_surface = load_icon_surface(f"{paths.ASSETS}/icons/gear.svg", 16, self.get_scale_factor())
         self.prefs_btn.set_image(Gtk.Image.new_from_surface(prefs_icon_surface))
+
+        # Real Applications icon for the apps mode-dot (22px to match ".mode-dot image" in
+        # peachos.css), tinted to the same #2c5f7c that CSS rule uses for the symbolic
+        # folder-symbolic/edit-paste-symbolic dot icons -- see _tint_icon_surface.
+        apps_icon_path = f"{paths.ASSETS}/icons/applications-mode.svg"
+        apps_dot_surface = load_icon_surface(apps_icon_path, 22, self.get_scale_factor())
+        apps_dot_tinted = _tint_icon_surface(apps_dot_surface, (0x2C / 255, 0x5F / 255, 0x7C / 255, 1.0))
+        self.apps_dot.set_image(Gtk.Image.new_from_surface(apps_dot_tinted))
+
+        # Same treatment for the entry's primary icon, tinted to match the muted
+        # rgba(60, 75, 90, 0.6) that ".input image" uses for the same two symbolic icons.
+        # Entry's icon setter only takes a GdkPixbuf, not a cairo surface, hence the convert.
+        entry_icon_surface = load_icon_surface(apps_icon_path, 18, self.get_scale_factor())
+        entry_icon_tinted = _tint_icon_surface(entry_icon_surface, (60 / 255, 75 / 255, 90 / 255, 0.6))
+        w, h = entry_icon_tinted.get_width(), entry_icon_tinted.get_height()
+        self._apps_icon_pixbuf = Gdk.pixbuf_get_from_surface(entry_icon_tinted, 0, 0, w, h)
 
         self.apply_theme()
         self.position_window()
@@ -368,6 +459,8 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         # Idle-state mode picker only makes sense with an empty query -- see on_mode_dot_clicked.
         if query_str:
             self.placeholder_label.set_text(self._default_placeholder)
+            self._active_mode = None
+            self._set_prompt_icon(None)
             self._dissolve_mode_dots()
             # Leave the apps grid immediately rather than waiting for the
             # query callback -- see the same note in on_mode_dot_clicked's

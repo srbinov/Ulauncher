@@ -41,7 +41,15 @@ def get_modes() -> list[Mode]:
     from ulauncher.modes.file_browser.file_browser_mode import FileBrowserMode
     from ulauncher.modes.shortcuts.shortcut_mode import ShortcutMode
 
-    return [FileBrowserMode(), CalcMode(), ShortcutMode(), ExtensionMode(ext_service), get_app_mode()]
+    # ClipboardMode intentionally not registered -- see app.py's setup() for why its background
+    # poll is disabled (destabilized Mutter). The mode code is still there for later.
+    return [
+        FileBrowserMode(),
+        CalcMode(),
+        ShortcutMode(),
+        ExtensionMode(ext_service),
+        get_app_mode(),
+    ]
 
 
 class UlauncherCore:

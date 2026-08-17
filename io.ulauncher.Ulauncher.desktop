@@ -1,14 +1,15 @@
 [Desktop Entry]
 Type=Application
 Version=1.5
-Name=Ulauncher
-Comment=Application launcher for Linux
-Icon=ulauncher
+Name=peachySearch
+Comment=peachOS's Spotlight-style app, file, and clipboard launcher
+Icon=peachysearch
 GenericName=Launcher
 Categories=GNOME;GTK;Utility;
 DBusActivatable=true
 Terminal=false
-TryExec=ulauncher
+TryExec=/home/user/peachOS/apps/ulauncher/bin/ulauncher
 Exec=gapplication launch io.ulauncher.Ulauncher
 SingleMainWindow=true
 X-GNOME-UsesNotifications=true
+NoDisplay=false

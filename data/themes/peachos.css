@@ -132,13 +132,13 @@ window.background,
   color: @selected_fg_color;
 }
 
-/* The row's own footprint (3 * 48px dots + 2 * 10px Box spacing = 164px)
+/* The row's own footprint (2 * 48px dots + 1 * 10px Box spacing = 106px)
    collapses to 0 alongside the dots below, so the search entry (packed
    expand=True, fill=True next to this row) grows into the freed space
    smoothly frame-by-frame as the transition runs, instead of snapping the
    instant _finish_dissolve() finally calls set_visible(False). */
 .mode-dots-row {
-  min-width: 164px;
+  min-width: 106px;
   margin-right: 15px;
   transition: min-width 300ms ease-out, margin 300ms ease-out;
 }
@@ -147,7 +147,7 @@ window.background,
   margin-right: 0;
 }
 
-/* Idle-state mode picker (Applications / Files / Clipboard) -- macOS
+/* Idle-state mode picker (Applications / Files) -- macOS
    Spotlight's row of circles, left-to-right in increasing tint.
    ".dissolving" (toggled from _dissolve_mode_dots/_materialize_mode_dots
    in ulauncher_window.py) fades + scatters each dot outward on typing --
@@ -195,21 +195,6 @@ window.background,
   min-height: 0;
   margin-top: -18px;
   transition-delay: 40ms;
-}
-
-.mode-dot.mode-dot-3 {
-  background-color: rgba(147, 205, 240, 0.9);
-}
-.mode-dot.mode-dot-3:hover {
-  background-color: rgba(147, 205, 240, 1);
-}
-.mode-dot.mode-dot-3.dissolving {
-  opacity: 0;
-  min-width: 0;
-  min-height: 0;
-  margin-top: -12px;
-  margin-left: 10px;
-  transition-delay: 80ms;
 }
 
 /* Applications mode-dot grid -- big icon + name below, no visible chrome
