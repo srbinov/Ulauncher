@@ -25,7 +25,7 @@ class Settings(JsonConf):
     render_on_screen: str = "mouse-pointer-monitor"
     show_tray_icon: bool = True
     terminal_command: str = ""
-    theme_name: str = "light"
+    theme_name: str = "peachos"
     tray_icon_name: str = "ulauncher-indicator-symbolic"
     window_shadow: int = 5
 
