@@ -32,8 +32,21 @@
    shows up as a solid rectangle instead of being invisible. */
 window,
 window.background,
-.background {
+window.csd,
+window.solid-csd,
+.background,
+decoration,
+decoration:backdrop {
   background-color: transparent;
+  background-image: none;
+  border: none;
+  /* MacTahoe's GTK theme puts a spread-only box-shadow on the `decoration`
+     node (0 0 0 2px / 0 0 0 1px rgba(0,0,0,...)) -- a faint 1-2px ring. On
+     Gnome/Wayland this window is monitor-sized (see ulauncher_window.py's
+     layout comment), so that ring drew a visible rectangle around the whole
+     screen behind the floating panel. Kill it. */
+  box-shadow: none;
+  outline: none;
 }
 
 /* Idle state -- macOS Tahoe Spotlight keeps a soft rounded glass container
