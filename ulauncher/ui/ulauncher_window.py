@@ -393,18 +393,18 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         self.prefs_btn.set_image(Gtk.Image.new_from_surface(prefs_icon_surface))
 
         # Real Applications icon for the apps mode-dot (22px to match ".mode-dot image" in
-        # peachos.css), tinted to the same #2c5f7c that CSS rule uses for the symbolic
-        # folder-symbolic/edit-paste-symbolic dot icons -- see _tint_icon_surface.
+        # peachos.css), tinted to the same #33455a (@icon_tint_color) that CSS rule uses for
+        # the symbolic folder-symbolic/edit-paste-symbolic dot icons -- see _tint_icon_surface.
         apps_icon_path = f"{paths.ASSETS}/icons/applications-mode.svg"
         apps_dot_surface = load_icon_surface(apps_icon_path, 22, self.get_scale_factor())
-        apps_dot_tinted = _tint_icon_surface(apps_dot_surface, (0x2C / 255, 0x5F / 255, 0x7C / 255, 1.0))
+        apps_dot_tinted = _tint_icon_surface(apps_dot_surface, (0x33 / 255, 0x45 / 255, 0x5A / 255, 1.0))
         self.apps_dot.set_image(Gtk.Image.new_from_surface(apps_dot_tinted))
 
-        # Same treatment for the entry's primary icon, tinted to match the muted
-        # rgba(60, 75, 90, 0.6) that ".input image" uses for the same two symbolic icons.
-        # Entry's icon setter only takes a GdkPixbuf, not a cairo surface, hence the convert.
+        # Same treatment for the entry's primary icon, tinted to match @icon_tint_color
+        # (#33455a) that ".input image" uses for the same two symbolic icons. Entry's icon
+        # setter only takes a GdkPixbuf, not a cairo surface, hence the convert.
         entry_icon_surface = load_icon_surface(apps_icon_path, 18, self.get_scale_factor())
-        entry_icon_tinted = _tint_icon_surface(entry_icon_surface, (60 / 255, 75 / 255, 90 / 255, 0.6))
+        entry_icon_tinted = _tint_icon_surface(entry_icon_surface, (0x33 / 255, 0x45 / 255, 0x5A / 255, 1.0))
         w, h = entry_icon_tinted.get_width(), entry_icon_tinted.get_height()
         self._apps_icon_pixbuf = Gdk.pixbuf_get_from_surface(entry_icon_tinted, 0, 0, w, h)
 
